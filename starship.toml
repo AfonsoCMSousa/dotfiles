@@ -1,0 +1,55 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+# Palette matching the polybar/i3/picom setup
+palette = "custom"
+
+add_newline = true
+
+format = """
+[$os]($os_style)[$directory]($directory_style)$git_branch$git_status$fill$cmd_duration
+[❯](bold accent) """
+
+[palettes.custom]
+accent    = "#ff0048"
+dark      = "#32373b"
+gray      = "#9da2ab"
+green     = "#c9f299"
+
+[fill]
+symbol = " "
+style = "dark"
+
+[os]
+disabled = false
+style = "bold accent"
+format = "[$symbol]($style) "
+
+[os.symbols]
+Void = "󰚞"
+
+[username]
+disabled = true
+
+[directory]
+style = "bold gray"
+format = "[$path]($style) "
+truncation_length = 3
+truncate_to_repo = true
+
+[git_branch]
+style = "fg:accent"
+format = "[ $symbol$branch]($style) "
+symbol = " "
+
+[git_status]
+style = "fg:green"
+format = "[$all_status$ahead_behind]($style) "
+
+[cmd_duration]
+style = "fg:gray"
+format = "[$duration]($style) "
+min_time = 2000
+
+[character]
+success_symbol = "[❯](bold accent)"
+error_symbol = "[❯](bold fg:#ff0048)"

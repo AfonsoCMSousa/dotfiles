@@ -1,0 +1,27 @@
+# Explicitly requested exclusions
+/git/
+/github-copilot/
+/asm-lsp/
+/fonts/
+/go/
+/gtk-2.0/
+/gtk-3.0/
+/nextjs-nodejs/
+
+# Machine-specific / private data, not meaningful to version:
+# - dconf: binary GNOME/GTK state dump
+# - pulse: PulseAudio auth cookie + machine-specific device DB
+# - redshift.conf: contains precise home GPS coordinates (lat/lon)
+/dconf/
+/pulse/
+redshift.conf
+
+# Already its own separate git repo with its own remote
+# (ssh://git@148.71.10.137:56036/AfonsoCMSousa/NVIMConfiguration.git) -
+# not nested here to avoid submodule/nested-repo issues.
+/nvim/
+
+# Common noise, just in case
+.DS_Store
+*.swp
+*.bak

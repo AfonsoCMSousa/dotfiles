@@ -1,0 +1,17 @@
+[terminal]
+shell = "/usr/bin/zsh"
+
+[font]
+size = 10
+
+[font.normal]
+family = "JetBrainsMono Nerd Font"
+style = "Medium"
+
+[window]
+opacity = 0.76
+
+[[keyboard.bindings]]
+key = "Return"
+mods = "Shift"
+chars = "\u001B\r"

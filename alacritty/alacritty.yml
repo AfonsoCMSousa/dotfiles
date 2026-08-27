@@ -1,0 +1,15 @@
+# Configuração da Fonte (para os ícones funcionarem no terminal)
+font:
+  normal:
+    family: "FiraCode Nerd Font"
+    style: Regular
+  size: 11
+
+# Configuração da Transparência (Obrigatório para o Picom)
+window:
+  opacity: 0.85 # Quão transparente é (0.8 = 80%)
+
+# Ativação do BLUR (a magia do picom)
+# Diz ao alacritty para "pedir" o blur ao picom
+background_opacity: 0.85
+blur: true

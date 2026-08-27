@@ -1,0 +1,96 @@
+# Palette matching the rest of the system (polybar/i3/picom/starship/nvim)
+# accent = #ff0048  dark = #32373b  gray = #9da2ab  green = #c9f299
+
+[global]
+    ### Display ###
+    monitor = 0
+    follow = none
+
+    ### Geometry ###
+    width = 350
+    height = (0, 300)
+
+    # Top-center, like a toast, sitting just below the polybar.
+    origin = top-center
+    offset = (0, 44)
+
+    scale = 0
+    notification_limit = 10
+
+    ### Progress bar ###
+    progress_bar = true
+    progress_bar_height = 8
+    progress_bar_frame_width = 0
+    progress_bar_min_width = 200
+    progress_bar_max_width = 300
+    progress_bar_corner_radius = 0
+    progress_bar_corners = all
+    icon_corner_radius = 0
+    icon_corners = all
+
+    indicate_hidden = yes
+    transparency = 8
+
+    # Individual floating cards instead of a shared separator line
+    # (gap_size needs a compositor - picom is running).
+    separator_height = 2
+    gap_size = 6
+    separator_color = frame
+
+    padding = 12
+    horizontal_padding = 12
+    text_icon_padding = 10
+
+    frame_width = 2
+    frame_color = "#ff0048"
+
+    sort = yes
+
+    ### Text ###
+    font = JetBrainsMono Nerd Font 10
+    line_height = 2
+    markup = full
+    format = "<b>%s</b>\n%b"
+    alignment = left
+    vertical_alignment = center
+    show_age_threshold = 60
+    ellipsize = middle
+    ignore_newline = no
+    stack_duplicates = true
+    hide_duplicate_count = false
+    show_indicators = yes
+    enable_posix_regex = false
+
+    ### Icons ###
+    enable_recursive_icon_lookup = true
+    icon_theme = Adwaita
+    icon_position = left
+    min_icon_size = 32
+    max_icon_size = 64
+
+    ### History ###
+    sticky_history = yes
+    history_length = 20
+
+    ### Misc ###
+    corner_radius = 0
+    corners = all
+    ignore_dbusclose = false
+
+[urgency_low]
+    background = "#32373b"
+    foreground = "#5a6570"
+    frame_color = "#5a6570"
+    timeout = 5
+
+[urgency_normal]
+    background = "#32373b"
+    foreground = "#9da2ab"
+    frame_color = "#ff0048"
+    timeout = 8
+
+[urgency_critical]
+    background = "#32373b"
+    foreground = "#ffffff"
+    frame_color = "#ff0048"
+    timeout = 0
