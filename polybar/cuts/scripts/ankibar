@@ -21,7 +21,9 @@ import html
 import json
 import os
 import re
+import shutil
 import signal
+import subprocess
 import sys
 import time
 import urllib.request
@@ -36,7 +38,12 @@ signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
 URL = os.environ.get("ANKIBAR_URL", "http://127.0.0.1:8765")
 QUERY = os.environ.get("ANKIBAR_QUERY", '"deck:Kaishi 1.5k" is:due')
 WOTD_QUERY = os.environ.get("ANKIBAR_WOTD_QUERY", '"deck:Kaishi 1.5k" -is:new')
-FIELDS = {"word": "Word", "reading": "Word Reading", "meaning": "Word Meaning", "freq": "Frequency"}
+FIELDS = {
+    "word": "Word", "reading": "Word Reading", "meaning": "Word Meaning",
+    "freq": "Frequency", "audio": "Word Audio",
+}
+# the word's pronunciation plays on flip (ANKIBAR_AUDIO=0 turns it off)
+AUDIO = os.environ.get("ANKIBAR_AUDIO", "1") != "0" and shutil.which("mpv")
 BATCH = 4
 RETRY = 60  # seconds between polls while idle, offline or showing a front
 SYNC_EVERY = 30 * 60  # Anki runs in the background for days and only syncs on open/close
@@ -89,7 +96,9 @@ def clean(text):
 
 def card_fields(info):
     fields = info["fields"]
-    card = {key: clean(fields[name]["value"]) for key, name in FIELDS.items()}
+    card = {key: clean(fields[name]["value"]) if name in fields else "" for key, name in FIELDS.items()}
+    sound = re.search(r"\[sound:([^\]]+)\]", card["audio"])  # "[sound:abc.mp3]"
+    card["audio"] = sound.group(1) if sound else ""
     card["id"] = info["cardId"]
     return card
 
@@ -142,6 +151,29 @@ def show_idle(wotd, today):
 
 def show_offline():
     out(color(MUTED, f"{ICON} offline"))
+
+
+_media_dir = None
+_player = None
+
+
+def play(card):
+    """Play the card's Word Audio with mpv, in the background."""
+    global _media_dir, _player
+    if not (AUDIO and card["audio"]):
+        return
+    if _media_dir is None:
+        _media_dir = anki("getMediaDirPath")
+    path = Path(_media_dir) / card["audio"]
+    if not path.is_file():
+        return
+    if _player and _player.poll() is None:
+        _player.terminate()  # still saying the previous word
+    _player = subprocess.Popen(
+        [AUDIO, "--no-video", "--no-config", "--really-quiet", str(path)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def word_of_the_day():
@@ -238,6 +270,7 @@ def main():
                 continue
 
             show_back(card, due, today)
+            play(card)
             sig = wait()
             if sig == signal.SIGHUP:
                 skipped.add(card["id"])
