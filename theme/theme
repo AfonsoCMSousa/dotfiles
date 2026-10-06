@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Desktop colors that follow the wallpaper.
 
-  theme apply [IMAGE]   build a palette from IMAGE (default: nitrogen's current
-                        wallpaper), write it out and reload everything
+  theme apply [IMAGE]   build a palette from IMAGE (default: the wallpaper that's
+                        on screen), write it out and reload everything
   theme ensure          write the files if missing (used before polybar starts)
-  theme watch           re-apply whenever nitrogen saves a new wallpaper
+  theme watch           re-apply whenever the wallpaper changes (nitrogen saves
+                        or previews, feh, ...: it watches the X root pixmap)
   theme palette IMAGE   just print the palette
 
 Outputs (outside the dotfiles repo, so wallpaper changes don't dirty git):
@@ -26,6 +27,7 @@ import time
 from pathlib import Path
 
 HOME = Path.home()
+HERE = Path(__file__).resolve().parent
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "theme"
 NITROGEN = HOME / ".config/nitrogen/bg-saved.cfg"
 STARSHIP_SRC = HOME / ".config/starship.toml"
@@ -101,48 +103,77 @@ def swatches(image):
 
 def palette(image):
     sw = swatches(image)
+    score = lambda c: c[4] ** 2 * c[0] ** 0.35  # vividness first, area helps
 
-    # accent: vivid, not too dark or washed out; area helps but vividness wins
-    candidates = [c for c in sw if 0.18 < c[2] < 0.88 and c[4] > 0.12]
-    if not candidates:
-        return dict(DEFAULT)
-    share, ah, _, _, _ = max(candidates, key=lambda c: c[4] ** 2 * c[0] ** 0.35)
+    # base tint for the neutrals: the most common color with any hue at all;
+    # tint strength scales with how much color the wallpaper has overall
+    tinted = [c for c in sw if c[4] > 0.04]
+    base_h = max(tinted, key=lambda c: c[0])[1] if tinted else 0
+    tint = min(1.0, sum(c[0] * c[4] for c in sw) / 0.10)  # 0 = black & white
 
-    # base tint for the neutrals: the most common color with any hue at all
-    tinted = [c for c in sw if c[4] > 0.04] or sw
-    base_h = max(tinted, key=lambda c: c[0])[1]
-
-    dark = hsl(base_h, 0.10, 0.21)
+    dark = hsl(base_h, 0.10 * tint, 0.21)
     pal = {
         "dark": dark,
-        "ambient": hsl(base_h, 0.15, 0.08),
-        "gray": hsl(base_h, 0.09, 0.65),
-        "muted": hsl(base_h, 0.08, 0.40),
+        "ambient": hsl(base_h, 0.15 * tint, 0.08),
+        "gray": hsl(base_h, 0.09 * tint, 0.65),
+        "muted": hsl(base_h, 0.08 * tint, 0.40),
         "white": "#ffffff",
     }
 
-    # accent: saturated, lightened until it reads clearly on the chips
+    candidates = [c for c in sw if 0.18 < c[2] < 0.88 and c[4] > 0.12]
+    if not candidates:
+        # black & white wallpaper: monochrome theme, white accent
+        pal["accent"] = "#ececec"
+        pal["secondary"] = "#b8b8b8"
+        return pal
+
+    # accent: the wallpaper's most vivid color. Its saturation follows how
+    # vivid that color really is, so a few colored specks on a grey image
+    # give a calm accent instead of a neon one.
+    _, ah, _, _, chroma = max(candidates, key=score)
+    sat = min(0.90, 0.30 + 1.5 * chroma)
     lum = 0.55
-    accent = hsl(ah, 0.90, lum)
-    while contrast(accent, dark) < 3.5 and lum < 0.80:
+    accent = hsl(ah, sat, lum)
+    while contrast(accent, dark) < 3.5 and lum < 0.85:  # readable on the chips
         lum += 0.02
-        accent = hsl(ah, 0.90, lum)
+        accent = hsl(ah, sat, lum)
     pal["accent"] = accent
 
     # secondary: the most vivid color at a clearly different hue, as a pastel;
     # if the wallpaper is basically one hue, use a hue opposite the accent
     others = [c for c in candidates if hue_dist(c[1], ah) > 0.12]
-    sh = max(others, key=lambda c: c[4] ** 2 * c[0] ** 0.35)[1] if others else ah + 0.40
-    pal["secondary"] = hsl(sh, 0.70, 0.78)
+    sh = max(others, key=score)[1] if others else ah + 0.40
+    pal["secondary"] = hsl(sh, min(0.70, sat), 0.78)
     return pal
 
 
-def current_wallpaper():
+def saved_wallpaper():
+    """The image nitrogen saved (only updated when you press Apply)."""
     try:
         m = re.search(r"^file=(.+)$", NITROGEN.read_text(), re.M)
         return Path(m.group(1)) if m else None
     except OSError:
         return None
+
+
+def rootpix(*args):
+    """Run the rootpix helper (built on first use); stdout, or None on failure."""
+    src, binary = HERE / "rootpix.c", CACHE / "rootpix"
+    try:
+        if not binary.exists() or src.stat().st_mtime > binary.stat().st_mtime:
+            CACHE.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["cc", "-O2", "-o", str(binary), str(src), "-lxcb"],
+                           check=True, capture_output=True, timeout=60)
+        out = subprocess.run([str(binary), *args], capture_output=True, text=True, timeout=15)
+        return out.stdout if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def screen_wallpaper():
+    """The background actually on screen (any setter, saved or just previewed)."""
+    path = CACHE / "screen.ppm"
+    return path if rootpix("dump", str(path)) is not None else None
 
 
 # ---- outputs ---------------------------------------------------------------
@@ -232,11 +263,19 @@ def reload_all():
 
 
 def apply(image=None, reload=True):
-    image = Path(image) if image else current_wallpaper()
+    if image:
+        image, source = Path(image), Path(image).name
+    else:
+        # what's on screen first (covers previews and other setters), then
+        # whatever nitrogen last saved
+        image, source = screen_wallpaper(), "the on-screen wallpaper"
+        if not image:
+            image = saved_wallpaper()
+            source = image.name if image else ""
     if image and image.is_file():
         try:
-            p, source = palette(image), image.name
-        except (subprocess.SubprocessError, OSError):
+            p = palette(image)
+        except (subprocess.SubprocessError, OSError, ValueError):
             p, source = dict(DEFAULT), "defaults (couldn't read wallpaper)"
     else:
         p, source = dict(DEFAULT), "defaults (no wallpaper)"
@@ -246,23 +285,38 @@ def apply(image=None, reload=True):
     return p
 
 
+def wallpaper_state():
+    """Changes whenever the wallpaper does: a fingerprint of the root pixmap
+    (nitrogen redraws into the same pixmap, so its id alone stays put) plus
+    nitrogen's save."""
+    try:
+        saved = NITROGEN.stat().st_mtime_ns
+    except OSError:
+        saved = None
+    return (rootpix("hash"), saved)
+
+
 def watch():
     lock = open(CACHE.parent / "theme-watch.lock", "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return  # already watching
-    last = None
+    applied = wallpaper_state()  # startup itself runs `ensure`
+    seen, since = applied, time.monotonic()
     while True:
-        try:
-            state = (NITROGEN.stat().st_mtime_ns, current_wallpaper())
-        except OSError:
-            state = None
-        if state != last:
-            if last is not None:  # skip the initial check; startup runs `ensure`
+        time.sleep(0.5)
+        state = wallpaper_state()
+        if state != seen:
+            seen, since = state, time.monotonic()
+        # wait for 1.5s of quiet, so clicking through previews in nitrogen
+        # recolors once for the one you stop on
+        if seen != applied and time.monotonic() - since >= 1.5:
+            try:
                 apply()
-            last = state
-        time.sleep(2)
+            except Exception as e:  # never let one bad wallpaper kill the watcher
+                print(f"theme: {e}", file=sys.stderr)
+            applied = seen
 
 
 def main():
