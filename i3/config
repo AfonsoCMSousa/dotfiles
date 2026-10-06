@@ -170,7 +170,7 @@ bindsym $mod+Shift+8 move container to workspace number $ws8
 bindsym $mod+Shift+9 move container to workspace number $ws9
 bindsym $mod+Shift+0 move container to workspace number $ws10
 
-bindsym $mod+Shift+p exec --no-startup-id maim -s | xclip -selection clipboard -t image/png
+bindsym $mod+Shift+p exec --no-startup-id maim -s | ~/.config/i3/scripts/clip-png
 
 # reload the configuration file
 bindsym $mod+Shift+c reload
