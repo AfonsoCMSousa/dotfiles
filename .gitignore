@@ -28,3 +28,6 @@ redshift.conf
 
 # Compiled helper, built from netspark.c by polybar/launch-top.sh
 /polybar/cuts/scripts/netspark
+
+# Generated from the wallpaper by theme/theme
+/dunst/dunstrc.d/90-theme.conf

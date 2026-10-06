@@ -6,6 +6,10 @@
 
 pkill -x polybar
 
+# Colors come from the wallpaper (~/.config/theme/theme); polybar can't
+# start if the generated colors file is missing, e.g. on a fresh clone.
+"$HOME/.config/theme/theme" ensure
+
 # The netspark sparkline is a compiled C helper; the binary isn't tracked
 # in git, so (re)build it when it's missing or older than its source.
 scripts="$HOME/.config/polybar/cuts/scripts"

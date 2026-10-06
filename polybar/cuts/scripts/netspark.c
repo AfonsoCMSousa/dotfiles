@@ -13,6 +13,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include <math.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -22,6 +23,37 @@
 #define CEIL_BPS  1e8 /* at or above this: full bar   */
 
 static const char *bars[] = {"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"};
+
+/* Wallpaper palette from ~/.config/theme/theme (polybar restarts us on every
+ * recolor); magenta defaults if the file is missing. */
+static char c_accent[8] = "#ff0048", c_secondary[8] = "#c9f299",
+            c_gray[8] = "#9da2ab", c_muted[8] = "#5a6570";
+
+static void load_palette(void)
+{
+    char path[512], line[128], key[32], val[16];
+    const char *cache = getenv("XDG_CACHE_HOME");
+    if (cache)
+        snprintf(path, sizeof path, "%s/theme/colors.sh", cache);
+    else
+        snprintf(path, sizeof path, "%s/.cache/theme/colors.sh", getenv("HOME"));
+
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    while (fgets(line, sizeof line, f)) {
+        if (sscanf(line, "%31[^=]=%15s", key, val) != 2 || val[0] != '#' || strlen(val) != 7)
+            continue;
+        char *dst = !strcmp(key, "accent")      ? c_accent
+                    : !strcmp(key, "secondary") ? c_secondary
+                    : !strcmp(key, "gray")      ? c_gray
+                    : !strcmp(key, "muted")     ? c_muted
+                                                : NULL;
+        if (dst)
+            memcpy(dst, val, 8);
+    }
+    fclose(f);
+}
 
 static int read_counters(const char *iface, unsigned long long *rx,
                          unsigned long long *tx)
@@ -67,13 +99,14 @@ static double seconds_between(struct timespec a, struct timespec b)
 
 static void print_missing(const char *iface)
 {
-    printf("%%{F#5a6570}no %s%%{F-}\n", iface);
+    printf("%%{F%s}no %s%%{F-}\n", c_muted, iface);
     fflush(stdout);
 }
 
 int main(int argc, char **argv)
 {
     const char *iface = argc > 1 ? argv[1] : "enp6s0";
+    load_palette();
     const struct timespec tick = {1, 0};
 
     double rxh[WIDTH] = {0}, txh[WIDTH] = {0};
@@ -107,10 +140,10 @@ int main(int argc, char **argv)
         pt = now;
 
         /* %{T8} is font-7 in config.ini: the block characters' size */
-        fputs("%{F#9da2ab}↓ %{T8}%{F#c9f299}", stdout);
+        printf("%%{F%s}↓ %%{T8}%%{F%s}", c_gray, c_secondary);
         for (int i = 0; i < WIDTH; i++)
             fputs(bars[level(rxh[(head + i) % WIDTH])], stdout);
-        fputs("%{T-}  %{F#9da2ab}↑ %{T8}%{F#ff0048}", stdout);
+        printf("%%{T-}  %%{F%s}↑ %%{T8}%%{F%s}", c_gray, c_accent);
         for (int i = 0; i < WIDTH; i++)
             fputs(bars[level(txh[(head + i) % WIDTH])], stdout);
         fputs("%{T-}%{F-}\n", stdout);

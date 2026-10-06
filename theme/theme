@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Desktop colors that follow the wallpaper.
+
+  theme apply [IMAGE]   build a palette from IMAGE (default: nitrogen's current
+                        wallpaper), write it out and reload everything
+  theme ensure          write the files if missing (used before polybar starts)
+  theme watch           re-apply whenever nitrogen saves a new wallpaper
+  theme palette IMAGE   just print the palette
+
+Outputs (outside the dotfiles repo, so wallpaper changes don't dirty git):
+  ~/.cache/theme/colors.sh       KEY=#hex, read by the polybar widget scripts
+  ~/.cache/theme/polybar.ini     [color] section, included by cuts/config.ini
+  ~/.cache/theme/i3.conf         client.* border colors, included by i3/config
+  ~/.cache/theme/rofi.rasi       imported by the cuts rofi themes
+  ~/.cache/theme/starship.toml   ~/.config/starship.toml with the palette swapped
+  ~/.config/dunst/dunstrc.d/90-theme.conf  (dunst only reads drop-ins there)
+"""
+
+import colorsys
+import fcntl
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "theme"
+NITROGEN = HOME / ".config/nitrogen/bg-saved.cfg"
+STARSHIP_SRC = HOME / ".config/starship.toml"
+DUNST_DROPIN = HOME / ".config/dunst/dunstrc.d/90-theme.conf"
+
+# The hand-picked magenta palette, used when there's no wallpaper or the
+# wallpaper has no usable color.
+DEFAULT = {
+    "accent": "#ff0048",
+    "secondary": "#c9f299",
+    "dark": "#32373b",
+    "ambient": "#161819",
+    "gray": "#9da2ab",
+    "muted": "#5a6570",
+    "white": "#ffffff",
+}
+
+
+# ---- color math ------------------------------------------------------------
+
+def hex_to_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def rgb_to_hex(rgb):
+    return "#" + "".join(f"{round(max(0, min(1, c)) * 255):02x}" for c in rgb)
+
+
+def hsl(h, s, l):
+    return rgb_to_hex(colorsys.hls_to_rgb(h % 1, l, s))
+
+
+def luminance(hexc):
+    def lin(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(c) for c in hex_to_rgb(hexc))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(a, b):
+    la, lb = sorted((luminance(a), luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def hue_dist(a, b):
+    d = abs(a - b) % 1
+    return min(d, 1 - d)
+
+
+# ---- palette ---------------------------------------------------------------
+
+def swatches(image):
+    """(share, h, l, s, chroma) for the image's 24 main colors."""
+    out = subprocess.run(
+        ["magick", str(image) + "[0]", "-resize", "256x256", "-colors", "24",
+         "-format", "%c", "histogram:info:-"],
+        capture_output=True, text=True, timeout=30, check=True,
+    ).stdout
+    rows = []
+    for line in out.splitlines():
+        m = re.search(r"^\s*(\d+):.*?(#[0-9A-Fa-f]{6})", line)
+        if m:
+            rows.append((int(m.group(1)), m.group(2)))
+    total = sum(n for n, _ in rows) or 1
+    result = []
+    for n, hexc in rows:
+        h, l, s = colorsys.rgb_to_hls(*hex_to_rgb(hexc))
+        chroma = s * (1 - abs(2 * l - 1))
+        result.append((n / total, h, l, s, chroma))
+    return result
+
+
+def palette(image):
+    sw = swatches(image)
+
+    # accent: vivid, not too dark or washed out; area helps but vividness wins
+    candidates = [c for c in sw if 0.18 < c[2] < 0.88 and c[4] > 0.12]
+    if not candidates:
+        return dict(DEFAULT)
+    share, ah, _, _, _ = max(candidates, key=lambda c: c[4] ** 2 * c[0] ** 0.35)
+
+    # base tint for the neutrals: the most common color with any hue at all
+    tinted = [c for c in sw if c[4] > 0.04] or sw
+    base_h = max(tinted, key=lambda c: c[0])[1]
+
+    dark = hsl(base_h, 0.10, 0.21)
+    pal = {
+        "dark": dark,
+        "ambient": hsl(base_h, 0.15, 0.08),
+        "gray": hsl(base_h, 0.09, 0.65),
+        "muted": hsl(base_h, 0.08, 0.40),
+        "white": "#ffffff",
+    }
+
+    # accent: saturated, lightened until it reads clearly on the chips
+    lum = 0.55
+    accent = hsl(ah, 0.90, lum)
+    while contrast(accent, dark) < 3.5 and lum < 0.80:
+        lum += 0.02
+        accent = hsl(ah, 0.90, lum)
+    pal["accent"] = accent
+
+    # secondary: the most vivid color at a clearly different hue, as a pastel;
+    # if the wallpaper is basically one hue, use a hue opposite the accent
+    others = [c for c in candidates if hue_dist(c[1], ah) > 0.12]
+    sh = max(others, key=lambda c: c[4] ** 2 * c[0] ** 0.35)[1] if others else ah + 0.40
+    pal["secondary"] = hsl(sh, 0.70, 0.78)
+    return pal
+
+
+def current_wallpaper():
+    try:
+        m = re.search(r"^file=(.+)$", NITROGEN.read_text(), re.M)
+        return Path(m.group(1)) if m else None
+    except OSError:
+        return None
+
+
+# ---- outputs ---------------------------------------------------------------
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)  # atomic: readers never see a half-written file
+
+
+def render(p, source):
+    a, s, d, amb, g, m, w = (p[k] for k in ("accent", "secondary", "dark", "ambient", "gray", "muted", "white"))
+    head = f"generated by ~/.config/theme/theme from {source}"
+
+    write(CACHE / "colors.sh", f"# {head}\n" + "".join(f"{k}={v}\n" for k, v in p.items()))
+
+    # names match the cuts theme's colors.ini; background = chip fill,
+    # background-alt = the bar's own strip (see colors.ini)
+    write(CACHE / "polybar.ini", f"""; {head}
+[color]
+background = #F0{d[1:]}
+background-alt = #99{amb[1:]}
+foreground = {g}
+foreground-alt = {w}
+primary = {a}
+red = {a}
+green = {s}
+yellow = {s}
+muted = {m}
+""")
+
+    write(CACHE / "i3.conf", f"""# {head}
+#                       border  background  text  indicator  child_border
+client.focused          {a} {d} {g} {a} {a}
+client.focused_inactive {d} {d} {g} {d} {d}
+client.unfocused        {d} {d} {m} {d} {d}
+client.urgent           {s} {d} {d} {s} {s}
+client.placeholder      {d} {d} {g} {d} {d}
+client.background       {d}
+""")
+
+    write(CACHE / "rofi.rasi", f"""/* {head} */
+* {{
+  al:   #00000000;
+  bg:   {d}F0;
+  bga:  {d}FF;
+  fg:   {g}FF;
+  ac:   {a}FF;
+  se:   {a}33;
+}}
+""")
+
+    starship = STARSHIP_SRC.read_text()
+    for key, val in (("accent", a), ("dark", d), ("gray", g), ("green", s)):
+        starship = re.sub(rf'^({key}\s*=\s*)"#[0-9a-fA-F]{{6}}"', rf'\g<1>"{val}"', starship, flags=re.M)
+    write(CACHE / "starship.toml", f"# {head}\n" + starship)
+
+    write(DUNST_DROPIN, f"""# {head}
+[global]
+    frame_color = "{a}"
+
+[urgency_low]
+    background = "{d}"
+    foreground = "{m}"
+    frame_color = "{m}"
+
+[urgency_normal]
+    background = "{d}"
+    foreground = "{g}"
+    frame_color = "{a}"
+
+[urgency_critical]
+    background = "{d}"
+    foreground = "{w}"
+    frame_color = "{a}"
+""")
+
+
+def reload_all():
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    # polybar restarts its tail scripts, so the widgets pick up colors.sh too
+    subprocess.run(["polybar-msg", "cmd", "restart"], **quiet)
+    subprocess.run(["i3-msg", "reload"], **quiet)
+    subprocess.run(["dunstctl", "reload"], **quiet)
+    # starship and rofi read their files fresh every time
+
+
+def apply(image=None, reload=True):
+    image = Path(image) if image else current_wallpaper()
+    if image and image.is_file():
+        try:
+            p, source = palette(image), image.name
+        except (subprocess.SubprocessError, OSError):
+            p, source = dict(DEFAULT), "defaults (couldn't read wallpaper)"
+    else:
+        p, source = dict(DEFAULT), "defaults (no wallpaper)"
+    render(p, source)
+    if reload:
+        reload_all()
+    return p
+
+
+def watch():
+    lock = open(CACHE.parent / "theme-watch.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return  # already watching
+    last = None
+    while True:
+        try:
+            state = (NITROGEN.stat().st_mtime_ns, current_wallpaper())
+        except OSError:
+            state = None
+        if state != last:
+            if last is not None:  # skip the initial check; startup runs `ensure`
+                apply()
+            last = state
+        time.sleep(2)
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "apply"
+    if cmd == "apply":
+        p = apply(sys.argv[2] if len(sys.argv) > 2 else None)
+        print(" ".join(f"{k}={v}" for k, v in p.items()))
+    elif cmd == "ensure":
+        if not all((CACHE / f).exists() for f in ("colors.sh", "polybar.ini", "i3.conf", "rofi.rasi", "starship.toml")):
+            apply(reload=False)
+    elif cmd == "watch":
+        CACHE.mkdir(parents=True, exist_ok=True)
+        watch()
+    elif cmd == "palette":
+        for k, v in palette(sys.argv[2]).items():
+            print(f"{k}={v}")
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

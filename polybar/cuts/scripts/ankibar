@@ -43,7 +43,23 @@ SYNC_EVERY = 30 * 60  # Anki runs in the background for days and only syncs on o
 MAX_BACK = 40  # characters of meaning before truncating
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "ankibar-wotd.json"
 
-ACCENT, GREEN, GRAY, MUTED = "#ff0048", "#c9f299", "#9da2ab", "#5a6570"
+
+def load_palette():
+    # wallpaper palette from ~/.config/theme/theme; polybar restarts this
+    # script on every recolor. Magenta defaults if it's missing.
+    pal = {"accent": "#ff0048", "secondary": "#c9f299", "gray": "#9da2ab", "muted": "#5a6570"}
+    path = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "theme/colors.sh"
+    try:
+        for line in path.read_text().splitlines():
+            key, sep, val = line.partition("=")
+            if sep and key in pal and re.fullmatch(r"#[0-9a-fA-F]{6}", val.strip()):
+                pal[key] = val.strip()
+    except OSError:
+        pass
+    return pal["accent"], pal["secondary"], pal["gray"], pal["muted"]
+
+
+ACCENT, GREEN, GRAY, MUTED = load_palette()
 ICON = "漢"
 GOOD, AGAIN = 3, 1
 

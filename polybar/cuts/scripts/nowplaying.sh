@@ -3,10 +3,13 @@
 # running, otherwise falls back to whatever else is actively playing
 # (e.g. a YouTube tab in Brave).
 
+# wallpaper palette from ~/.config/theme/theme (magenta defaults if missing)
+. "${XDG_CACHE_HOME:-$HOME/.cache}/theme/colors.sh" 2>/dev/null
+
 players=$(playerctl -l 2>/dev/null)
 
 if [ -z "$players" ]; then
-    echo "%{F#5a6570} Nothing playing%{F-}"
+    echo "%{F${muted:-#5a6570}} Nothing playing%{F-}"
     exit 0
 fi
 
@@ -33,9 +36,9 @@ if [ "${#info}" -gt "$maxlen" ]; then
 fi
 
 if [ "$status" = "Playing" ]; then
-    echo "%{F#c9f299}%{F-} ${info}"
+    echo "%{F${secondary:-#c9f299}}%{F-} ${info}"
 elif [ "$status" = "Paused" ]; then
-    echo "%{F#5a6570}%{F-} ${info}"
+    echo "%{F${muted:-#5a6570}}%{F-} ${info}"
 else
-    echo "%{F#5a6570}%{F-} ${info}"
+    echo "%{F${muted:-#5a6570}}%{F-} ${info}"
 fi

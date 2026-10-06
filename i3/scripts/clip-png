@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """Put a PNG read from stdin on the CLIPBOARD, e.g. `maim -s | clip-png`.
 
-Replaces `xclip -selection clipboard -t image/png`: xclip 0.13 hangs when
-serving images over ~1 MB (X's chunked INCR transfer), so pasting a real
-screenshot froze whatever app you pasted into. GTK handles large transfers.
-
-Detaches and keeps serving the image until something else is copied, then
-exits. Also offers the image as jpeg/bmp/tiff for apps that want those.
+Small images (most region grabs) go straight to xclip: instant, like before.
+xclip 0.13 hangs serving anything over ~1 MB (X's chunked INCR transfer),
+freezing whatever app pastes it, so bigger images are served from here via
+GTK, which handles large transfers. Either way the original PNG bytes are
+served as-is: no decoding or re-compressing.
 """
 
 import os
+import subprocess
 import sys
+
+XCLIP_MAX = 900_000  # xclip 0.13 served ~0.92 MB fine and hung at ~2.2 MB
+LINGER = 10  # seconds to keep serving after losing the clipboard
 
 data = sys.stdin.buffer.read()
 if not data:  # e.g. maim -s cancelled with Esc: leave the clipboard alone
     sys.exit(1)
+
+if len(data) <= XCLIP_MAX:
+    # xclip forks itself into the background once it has read stdin
+    subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png"], input=data)
+    sys.exit(0)
 
 # Return right away so the calling pipeline (an i3 keybinding) finishes.
 if os.fork():
@@ -29,32 +37,27 @@ import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")  # or `import Gdk` picks Gdk 4, clashing with Gtk 3
-gi.require_version("GdkPixbuf", "2.0")
-gi.require_version("GdkX11", "3.0")
-from gi.repository import Gdk, GdkPixbuf, GdkX11, Gtk  # noqa: E402, F401
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-loader = GdkPixbuf.PixbufLoader()
-loader.write(data)
-loader.close()
+PNG = Gdk.Atom.intern("image/png", False)
 
-clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-clipboard.set_image(loader.get_pixbuf())
+owner = Gtk.Invisible()
+if not Gtk.selection_owner_set(owner, Gdk.SELECTION_CLIPBOARD, Gdk.CURRENT_TIME):
+    sys.exit(1)
+Gtk.selection_add_target(owner, Gdk.SELECTION_CLIPBOARD, PNG, 0)
 
 
-def owner_xid():
-    # GDK wraps foreign owners in window objects too, so compare X IDs
-    owner = Gdk.selection_owner_get(Gdk.SELECTION_CLIPBOARD)
-    return owner.get_xid() if owner else None
+def on_get(_widget, selection, _info, _time):
+    selection.set(PNG, 8, data)
 
 
-ours = owner_xid()
+def on_clear(_widget, _event):
+    # Something else was copied. Linger so a paste that's still mid-transfer
+    # can finish; quitting now would leave that app waiting forever.
+    GLib.timeout_add_seconds(LINGER, Gtk.main_quit)
+    return False
 
 
-def on_owner_change(_clipboard, _event):
-    # Also fires for our own set_image; quit once another client owns it.
-    if owner_xid() != ours:
-        Gtk.main_quit()
-
-
-clipboard.connect("owner-change", on_owner_change)
+owner.connect("selection-get", on_get)
+owner.connect("selection-clear-event", on_clear)
 Gtk.main()

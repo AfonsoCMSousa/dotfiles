@@ -1,10 +1,13 @@
-/* colors */
+/* colors: magenta defaults, overridden by the wallpaper palette that
+ * ~/.config/theme/theme writes (a missing import is ignored by rofi) */
 
 * {
   al:   #00000000;
-  bg:   #0a0a0aBF;
-  bga:  #0a0a0aFF;
-  fg:   #f5f5f5FF;
-  ac:   #fdd835FF;
-  se:   #fdd8351A;
+  bg:   #32373bF0;
+  bga:  #32373bFF;
+  fg:   #9da2abFF;
+  ac:   #ff0048FF;
+  se:   #ff004833;
 }
+
+@import "~/.cache/theme/rofi.rasi"

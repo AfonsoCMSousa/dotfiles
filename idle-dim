@@ -1,0 +1,10 @@
+ Inactivity time before dimming
+THRESHOLD_MIN=10
+
+# Dimmed brightness (0.1 – 1.0)
+BRIGHTNESS=0.75      
+GAMMA=0.4           # lower = deeper shadows (try 0.6–0.9)
+
+# Fade-out smoothness
+FADE_STEPS=100      # more steps = smoother
+FADE_DELAY=0.10     # seconds between steps
