@@ -6,6 +6,13 @@
 
 pkill -x polybar
 
+# The netspark sparkline is a compiled C helper; the binary isn't tracked
+# in git, so (re)build it when it's missing or older than its source.
+scripts="$HOME/.config/polybar/cuts/scripts"
+if [ "$scripts/netspark.c" -nt "$scripts/netspark" ]; then
+    cc -O2 -o "$scripts/netspark" "$scripts/netspark.c" -lm
+fi
+
 while pgrep -u "$UID" -x polybar >/dev/null; do
     sleep 1
 done

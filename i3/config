@@ -226,3 +226,9 @@ for_window [class="discord"] border pixel 2
 
 assign [class="Spotify"] $ws1
 assign [class="discord"] $ws1
+
+# Anki runs hidden in the background for the polybar Anki module (needs
+# AnkiConnect). The main window is parked in the scratchpad once, when it
+# first appears; scripts/anki-show (the rofi Anki entry) brings it back.
+exec --no-startup-id ~/.config/i3/scripts/anki-daemon.sh
+for_window [class="Anki" title="- Anki$"] move scratchpad

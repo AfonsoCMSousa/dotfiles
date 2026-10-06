@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Opens Anki. The background instance (anki-daemon.sh) keeps its window in
+# the i3 scratchpad, and Anki's own single-instance handoff doesn't bring it
+# back out. So: hand any file (e.g. an .apkg) to the running instance, then
+# reveal its window. Starts Anki first if it isn't running.
+
+MAIN='[class="Anki" title="- Anki$"]'
+running() { pgrep -f '^/usr/bin/python3 /usr/bin/anki( |$)' >/dev/null; }
+
+if running; then
+    [ $# -gt 0 ] && anki "$@"
+else
+    anki "$@" >/dev/null 2>&1 &
+fi
+
+# The main window may still be starting up, so retry for up to ~30s.
+# `scratchpad show` fails when it isn't hidden, so fall back to focusing it.
+for _ in $(seq 120); do
+    i3-msg "$MAIN scratchpad show, floating disable" >/dev/null 2>&1 && exit 0
+    i3-msg "$MAIN focus" >/dev/null 2>&1 && exit 0
+    sleep 0.25
+done
+exit 1

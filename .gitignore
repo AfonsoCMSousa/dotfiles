@@ -25,3 +25,6 @@ redshift.conf
 .DS_Store
 *.swp
 *.bak
+
+# Compiled helper, built from netspark.c by polybar/launch-top.sh
+/polybar/cuts/scripts/netspark

@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""ankibar - review Anki cards from polybar (custom/script, tail = true).
+
+Talks to AnkiConnect and prints one line whenever the display changes.
+Clicks arrive as signals via polybar's %pid% token:
+  USR1  flip FRONT -> BACK, then answer Good
+  USR2  answer Again (only from BACK; you must see the answer first)
+  HUP   skip the current card / refresh now
+
+States:
+  IDLE     nothing due: word of the day (cached for the day)
+  FRONT    the word, in the accent colour, plus the due count
+  BACK     reading and meaning
+  OFFLINE  AnkiConnect unreachable; retries every RETRY seconds or on click
+
+Nothing here survives a restart except the word-of-the-day cache, and
+that's refetchable; everything else is pulled fresh from Anki.
+"""
+
+import html
+import json
+import os
+import re
+import signal
+import sys
+import time
+import urllib.request
+from datetime import date
+from pathlib import Path
+
+# Block the click signals before anything else: their default action
+# would kill us. They're consumed synchronously with sigtimedwait below.
+SIGNALS = {signal.SIGUSR1, signal.SIGUSR2, signal.SIGHUP}
+signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+
+URL = os.environ.get("ANKIBAR_URL", "http://127.0.0.1:8765")
+QUERY = os.environ.get("ANKIBAR_QUERY", '"deck:Kaishi 1.5k" is:due')
+WOTD_QUERY = os.environ.get("ANKIBAR_WOTD_QUERY", '"deck:Kaishi 1.5k" -is:new')
+FIELDS = {"word": "Word", "reading": "Word Reading", "meaning": "Word Meaning", "freq": "Frequency"}
+BATCH = 4
+RETRY = 60  # seconds between polls while idle, offline or showing a front
+SYNC_EVERY = 30 * 60  # Anki runs in the background for days and only syncs on open/close
+MAX_BACK = 40  # characters of meaning before truncating
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "ankibar-wotd.json"
+
+ACCENT, GREEN, GRAY, MUTED = "#ff0048", "#c9f299", "#9da2ab", "#5a6570"
+ICON = "漢"
+GOOD, AGAIN = 3, 1
+
+TAG = re.compile(r"<[^>]+>")
+
+
+class AnkiError(Exception):
+    pass
+
+
+def anki(action, _timeout=3, **params):
+    body = json.dumps({"action": action, "version": 6, "params": params}).encode()
+    try:
+        with urllib.request.urlopen(URL, body, timeout=_timeout) as reply:
+            data = json.load(reply)
+    except (OSError, ValueError) as e:  # connection refused, timeout, bad JSON
+        raise AnkiError(e) from e
+    if data.get("error"):
+        raise AnkiError(data["error"])
+    return data["result"]
+
+
+def clean(text):
+    # Card fields are HTML; also neutralise anything polybar would parse as a tag.
+    return html.unescape(TAG.sub("", text)).replace("%{", "% {").strip()
+
+
+def card_fields(info):
+    fields = info["fields"]
+    card = {key: clean(fields[name]["value"]) for key, name in FIELDS.items()}
+    card["id"] = info["cardId"]
+    return card
+
+
+def truncate(text, n):
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def color(c, text):
+    return f"%{{F{c}}}{text}%{{F-}}"
+
+
+def big(text):
+    # font-6 in config.ini: larger bold CJK, for the thing you're meant to read
+    return f"%{{T7}}{text}%{{T-}}"
+
+
+def out(text):
+    print(text, flush=True)
+
+
+def stats(due, today):
+    # e.g. "159 due · 12 today": what's left, and progress as you click through
+    sep = color(MUTED, " · ")
+    return f"{color(GRAY, due)} {color(MUTED, 'due')}{sep}{color(GRAY, today)} {color(MUTED, 'today')}"
+
+
+def show_front(card, due, today):
+    out(f"{color(ACCENT, ICON)} {stats(due, today)}   {color(ACCENT, big(card['word']))}")
+
+
+def show_back(card, due, today):
+    meaning = truncate(card["meaning"], MAX_BACK)
+    # the deck's frequency rank: how common the word is
+    freq = f"  {color(MUTED, '#' + card['freq'])}" if card["freq"] else ""
+    out(
+        f"{color(ACCENT, ICON)} {stats(due, today)}   "
+        f"{color(GREEN, big(card['reading']))}  {color(GRAY, meaning)}{freq}"
+    )
+
+
+def show_idle(wotd, today):
+    done = f"{color(MUTED, ICON + ' ✓')} {color(GRAY, today)} {color(MUTED, 'today')}"
+    if wotd:
+        meaning = truncate(wotd["meaning"], MAX_BACK)
+        out(f"{done}   {color(GRAY, big(wotd['word']))}  {color(MUTED, meaning)}")
+    else:
+        out(done)
+
+
+def show_offline():
+    out(color(MUTED, f"{ICON} offline"))
+
+
+def word_of_the_day():
+    today = date.today().isoformat()
+    try:
+        cached = json.loads(CACHE.read_text())
+        if cached.get("date") == today:
+            return cached
+    except (OSError, ValueError):
+        pass
+
+    ids = sorted(anki("findCards", query=WOTD_QUERY))
+    if not ids:
+        return None
+    pick = ids[date.today().toordinal() % len(ids)]  # same word all day
+    wotd = card_fields(anki("cardsInfo", cards=[pick])[0])
+    wotd["date"] = today
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    CACHE.write_text(json.dumps(wotd, ensure_ascii=False))
+    return wotd
+
+
+def answer(card_id, ease):
+    # Answer the exact card that was on screen, and only if it still matches
+    # the query: it may have been reviewed in the Anki window meanwhile.
+    if not anki("findCards", query=f"cid:{card_id} ({QUERY})"):
+        return
+    ok = anki("answerCards", answers=[{"cardId": card_id, "ease": ease}])
+    if ok != [True]:
+        print(f"ankibar: answerCards({card_id}, {ease}) -> {ok}", file=sys.stderr)
+
+
+def wait(timeout=None):
+    """Return the next click signal, or None if `timeout` seconds pass first.
+
+    Clicks that were already pending are dropped, so only clicks made after
+    the current display was drawn count: a fast triple-click can't flip and
+    then grade a card you never saw.
+    """
+    while signal.sigtimedwait(SIGNALS, 0):
+        pass
+    if timeout is None:
+        return signal.sigwaitinfo(SIGNALS).si_signo
+    info = signal.sigtimedwait(SIGNALS, timeout)
+    return info.si_signo if info else None
+
+
+def sync():
+    # Pull phone reviews in / push bar reviews out. Failures (no network,
+    # AnkiWeb wanting a full sync) are logged, not treated as offline.
+    try:
+        anki("sync", _timeout=120)
+    except AnkiError as e:
+        print(f"ankibar: sync failed: {e}", file=sys.stderr)
+
+
+def main():
+    queue = []  # batch of upcoming cards; queue[0] is on screen
+    skipped = set()  # kept out of new batches until nothing else is due
+    last_sync = time.monotonic()  # Anki syncs by itself when it starts
+
+    while True:
+        try:
+            if time.monotonic() - last_sync > SYNC_EVERY:
+                sync()
+                last_sync = time.monotonic()
+
+            ids = anki("findCards", query=QUERY)
+            due = len(ids)
+            today = anki("getNumCardsReviewedToday")
+            due_set = set(ids)
+            queue = [c for c in queue if c["id"] in due_set]  # reviewed elsewhere
+            if not queue:
+                fresh = [i for i in ids if i not in skipped]
+                if not fresh:
+                    skipped.clear()
+                    fresh = ids
+                if fresh:
+                    queue = [card_fields(i) for i in anki("cardsInfo", cards=fresh[:BATCH])]
+
+            if not queue:
+                show_idle(word_of_the_day(), today)
+                wait(RETRY)
+                continue
+
+            card = queue[0]
+            show_front(card, due, today)
+            sig = wait(RETRY)
+            if sig is None or sig == signal.SIGUSR2:
+                continue  # timeout: refresh the count; Again needs the back first
+            if sig == signal.SIGHUP:
+                skipped.add(card["id"])
+                queue.pop(0)
+                continue
+
+            show_back(card, due, today)
+            sig = wait()
+            if sig == signal.SIGHUP:
+                skipped.add(card["id"])
+            else:
+                answer(card["id"], GOOD if sig == signal.SIGUSR1 else AGAIN)
+            queue.pop(0)
+
+        except AnkiError as e:
+            print(f"ankibar: {e}", file=sys.stderr)
+            queue.clear()
+            show_offline()
+            wait(RETRY)  # any click retries immediately
+
+
+if __name__ == "__main__":
+    main()
