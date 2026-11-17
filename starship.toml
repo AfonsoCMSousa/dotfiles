@@ -26,6 +26,8 @@ format = "[$symbol]($style) "
 
 [os.symbols]
 Void = "󰚞"
+Windows = "\uf17a"
+RedHat = "\ue7bb"
 
 [username]
 disabled = true
